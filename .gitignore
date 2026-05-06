@@ -1,0 +1,32 @@
+__pycache__/
+*.pyc
+*.pyo
+*.swp
+.DS_Store
+.venv/
+venv/
+.env
+*.log
+*.heartbeat
+
+# Cooked weights never go in git · they live on NAS / HF / S3
+*.safetensors
+*.bin
+*.pt
+adapter_model.safetensors
+checkpoint-*/
+
+# Big corpora never go in git either · live on NAS
+train.jsonl
+eval.jsonl
+*.jsonl
+
+# Cook artifacts (live on rig · stay there)
+build.log
+cook.log
+smoke.log
+
+# Editor
+.idea/
+.vscode/
+*.swo
