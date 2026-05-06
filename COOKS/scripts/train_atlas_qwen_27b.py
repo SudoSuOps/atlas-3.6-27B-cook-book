@@ -30,7 +30,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 # CONFIG · CHANGE FOR THIS BUILD ONLY
 # ═══════════════════════════════════════════════════════════════════════
 
-MODEL_NAME = "Qwen/Qwen3.6-27B"
+MODEL_NAME = "/data2/qwen-3.6-27b"             # local · base downloaded earlier (52 GB)
+CANONICAL_BASE = "Qwen/Qwen3.6-27B"             # for manifest provenance
 TRAIN_FILE = "/data1/atlas-qwen-27b/train.jsonl"
 EVAL_FILE = "/data1/atlas-qwen-27b/eval.jsonl"
 OUTPUT_DIR = Path("/data1/atlas-qwen-27b/lora-adapter")
@@ -355,7 +356,8 @@ def main():
     # ─── Manifest ───
     manifest = {
         "model": BUILD_NAME,
-        "base": MODEL_NAME,
+        "base_local_path": MODEL_NAME,
+        "base_canonical": CANONICAL_BASE,
         "architecture": "Qwen3_5ForConditionalGeneration · hybrid GDN + standard attention",
         "method": f"bf16 LoRA r={LORA_R} alpha={LORA_ALPHA}",
         "config_source": "Swarm Gold Standard (SwarmCurator-27B-v1 · loss 0.477)",
