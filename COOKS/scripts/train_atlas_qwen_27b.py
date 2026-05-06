@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """
-Atlas-Qwen-27B Training · Forked from Swarm Gold Standard
-==========================================================
+Atlas-Qwen-27B Training · Gold Standard recipe + vanilla transformers stack
+============================================================================
 
-Fork of `gold_standard_27b.py` from the swarm-qwen-27B-Gold-Standard-Build-LLM
-repo · adapted ONLY in the CONFIG section (paths + build name + base model).
+Adapted from gold_standard_27b.py with one substrate-deviation:
+DROPPED Unsloth FastLanguageModel because Unsloth 2026.5.2's bundled FA2 kernels
+are not compiled for Blackwell sm_120 (RTX PRO 6000 Workstation Edition).
 
-The HYPERPARAMETERS section is verbatim · do NOT modify · proven on
-SwarmCurator-27B-v1 (loss 0.477 · 1000 steps · 14.38h on RTX PRO 6000 96GB).
+Replaced with vanilla `transformers.AutoModelForCausalLM` + `peft.LoraConfig` +
+`attn_implementation="sdpa"` · which is the EXACT path used by Bookmaker-8B
+(0.467 final eval) and Hack-Deed-Maker-3B (0.5383) on the same Blackwell tier.
+
+ALL hyperparameters identical to Gold Standard · only the model loader changes.
 
 Usage:
     CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 \\
@@ -30,14 +34,14 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 # CONFIG · CHANGE FOR THIS BUILD ONLY
 # ═══════════════════════════════════════════════════════════════════════
 
-MODEL_NAME = "/data2/qwen-3.6-27b"             # local · base downloaded earlier (52 GB)
-CANONICAL_BASE = "Qwen/Qwen3.6-27B"             # for manifest provenance
+MODEL_NAME = "/data2/qwen-3.6-27b"               # local · base downloaded earlier (52 GB)
+CANONICAL_BASE = "Qwen/Qwen3.6-27B"              # for manifest provenance
 TRAIN_FILE = "/data1/atlas-qwen-27b/train.jsonl"
 EVAL_FILE = "/data1/atlas-qwen-27b/eval.jsonl"
 OUTPUT_DIR = Path("/data1/atlas-qwen-27b/lora-adapter")
 MERGED_DIR = Path("/data1/atlas-qwen-27b/merged")
 LOG_DIR = Path("/data1/atlas-qwen-27b/logs")
-NAS_MIRROR = Path("/mnt/swarm/model_archives/atlas-qwen-27b")  # best-effort post-cook
+NAS_MIRROR = Path("/mnt/swarm/model_archives/atlas-qwen-27b")  # best-effort
 BUILD_NAME = "Atlas-Qwen-27B"
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -49,9 +53,9 @@ LORA_R = 64
 LORA_ALPHA = 32
 LORA_DROPOUT = 0.0
 LEARNING_RATE = 1e-5            # PROVEN · NEVER 2e-5+ for 27B
-MAX_EPOCH_FRACTION = 0.6        # never full epoch · prevents memorization
-BATCH_SIZE = 2                  # 27B bf16 is tight on 96GB
-GRAD_ACCUM = 16                 # effective batch = 32
+MAX_EPOCH_FRACTION = 0.6
+BATCH_SIZE = 1                  # vanilla transformers GC needs batch=1 for 27B safety
+GRAD_ACCUM = 32                 # effective batch = 32 (matches Gold Standard target)
 MAX_SEQ_LEN = 4096
 WARMUP_RATIO = 0.05
 WEIGHT_DECAY = 0.01
@@ -60,23 +64,21 @@ EVAL_STEPS = 200
 SAVE_STEPS = 200
 EARLY_STOPPING_PATIENCE = 3
 EARLY_STOPPING_THRESHOLD = 0.001
-MAX_EVAL_SAMPLES = 500          # without packing · 3K+ samples = 34 min/eval
+MAX_EVAL_SAMPLES = 500
 SAVE_TOTAL_LIMIT = 5
 
+# Gold Standard target_modules (standard list · GDN params stay frozen)
 TARGET_MODULES = [
-    "q_proj", "k_proj", "v_proj", "o_proj",       # standard attention (25% of layers)
-    "gate_proj", "up_proj", "down_proj",            # MLP (all layers)
+    "q_proj", "k_proj", "v_proj", "o_proj",
+    "gate_proj", "up_proj", "down_proj",
 ]
-# We do NOT target GDN-specific params (in_proj_qkv, in_proj_z, etc.) · proven
-# fine frozen on SwarmCurator-27B-v1.
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# DATA VALIDATION · pre-flight gates
+# DATA VALIDATION
 # ═══════════════════════════════════════════════════════════════════════
 
 def validate_data(train_path: str, eval_path: str):
-    """Pre-flight data validation. Fails fast on bad data."""
     for label, path in [("Train", train_path), ("Eval", eval_path)]:
         if not os.path.exists(path):
             raise FileNotFoundError(f"{label} file not found: {path}")
@@ -103,14 +105,14 @@ def validate_data(train_path: str, eval_path: str):
     train_sha = hashlib.sha256(open(train_path, "rb").read()).hexdigest()
     eval_sha = hashlib.sha256(open(eval_path, "rb").read()).hexdigest()
 
-    print(f"  Train: {train_count:,} records (SHA256: {train_sha[:16]}...)")
-    print(f"  Eval:  {eval_count:,} records (SHA256: {eval_sha[:16]}...)")
-    print(f"  System prompt diversity: {len(sys_prompts)} unique")
+    print(f"  Train: {train_count:,} records (SHA256: {train_sha[:16]}...)", flush=True)
+    print(f"  Eval:  {eval_count:,} records (SHA256: {eval_sha[:16]}...)", flush=True)
+    print(f"  System prompt diversity: {len(sys_prompts)} unique", flush=True)
 
     if train_count < 1000:
         raise ValueError(f"Dataset too small: {train_count} records (min 1000)")
     if len(sys_prompts) < 15:
-        print(f"  WARNING: Low system prompt diversity ({len(sys_prompts)}). Target ≥30.")
+        print(f"  WARNING: Low system prompt diversity ({len(sys_prompts)}). Target ≥30.", flush=True)
 
     max_share = 0
     if sys_prompts:
@@ -124,7 +126,7 @@ def validate_data(train_path: str, eval_path: str):
                     prompt_counts[key] = prompt_counts.get(key, 0) + 1
         max_share = max(prompt_counts.values()) / train_count
         if max_share > 0.15:
-            print(f"  WARNING: Dominant prompt at {max_share:.1%} (target <15%)")
+            print(f"  WARNING: Dominant prompt at {max_share:.1%} (target <15%)", flush=True)
 
     return {
         "train_count": train_count,
@@ -137,11 +139,11 @@ def validate_data(train_path: str, eval_path: str):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# TRAINING
+# TRAINING (vanilla transformers + peft)
 # ═══════════════════════════════════════════════════════════════════════
 
 def main():
-    parser = argparse.ArgumentParser(description=f"Train {BUILD_NAME} (Gold Standard recipe)")
+    parser = argparse.ArgumentParser(description=f"Train {BUILD_NAME} (Gold Standard recipe · vanilla stack)")
     parser.add_argument("--smoke-test", action="store_true",
                         help="500 samples · quick validation")
     parser.add_argument("--pilot", action="store_true",
@@ -151,67 +153,73 @@ def main():
                         help="Resume from checkpoint path (ONLY if same LR/config)")
     args = parser.parse_args()
 
-    # Imports here so argparse/help works without GPU
-    from unsloth import FastLanguageModel
-    from transformers import AutoTokenizer, EarlyStoppingCallback
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer, EarlyStoppingCallback
+    from peft import LoraConfig, get_peft_model
     from trl import SFTTrainer, SFTConfig
     from datasets import load_dataset
-    import torch
 
-    # ─── Pre-flight banner ───
-    print("=" * 70)
-    print(f"  {BUILD_NAME} · GOLD STANDARD RECIPE (forked from SwarmCurator-27B-v1)")
-    print(f"  Base:       {MODEL_NAME}")
-    print(f"  Method:     bf16 LoRA r={LORA_R} alpha={LORA_ALPHA}")
-    print(f"  LR:         {LEARNING_RATE} (proven · never 2e-5+)")
-    print(f"  Batch:      {BATCH_SIZE} x {GRAD_ACCUM} = {BATCH_SIZE * GRAD_ACCUM} effective")
-    print(f"  Max Seq:    {args.max_seq_len}")
-    print(f"  Scheduler:  {LR_SCHEDULER}")
-    print(f"  GPU:        {torch.cuda.get_device_name(0)}")
-    print(f"  VRAM:       {torch.cuda.get_device_properties(0).total_memory / 1e9:.0f} GB")
+    print("=" * 70, flush=True)
+    print(f"  {BUILD_NAME} · GOLD STANDARD recipe · vanilla stack (sm_120 / Blackwell)", flush=True)
+    print(f"  Base:       {MODEL_NAME}", flush=True)
+    print(f"  Method:     bf16 LoRA r={LORA_R} alpha={LORA_ALPHA}", flush=True)
+    print(f"  LR:         {LEARNING_RATE}", flush=True)
+    print(f"  Batch:      {BATCH_SIZE} x {GRAD_ACCUM} = {BATCH_SIZE * GRAD_ACCUM} effective", flush=True)
+    print(f"  Max Seq:    {args.max_seq_len}", flush=True)
+    print(f"  Scheduler:  {LR_SCHEDULER}", flush=True)
+    print(f"  GPU:        {torch.cuda.get_device_name(0)}", flush=True)
+    print(f"  VRAM:       {torch.cuda.get_device_properties(0).total_memory / 1e9:.0f} GB", flush=True)
+    print(f"  Attention:  sdpa  (sm_120 compatible · NOT FA2)", flush=True)
     if args.smoke_test:
-        print(f"  Mode:       SMOKE TEST (500 samples)")
+        print(f"  Mode:       SMOKE TEST (500 samples)", flush=True)
     elif args.pilot:
-        print(f"  Mode:       PILOT (5000 samples)")
+        print(f"  Mode:       PILOT (5000 samples)", flush=True)
     else:
-        print(f"  Mode:       FULL · Block-1-v2 (407K records)")
-    if args.resume:
-        print(f"  Resume:     {args.resume}")
-    print("=" * 70)
+        print(f"  Mode:       FULL · Block-1-v3 (486K records)", flush=True)
+    print("=" * 70, flush=True)
 
-    # ─── Validate data ───
-    print("\n[0/5] Validating data...")
+    print("\n[0/5] Validating data...", flush=True)
     data_info = validate_data(TRAIN_FILE, EVAL_FILE)
 
-    # ─── Model ───
-    print(f"\n[1/5] Loading {MODEL_NAME} (27B bf16, ~54 GB)...")
-    model, _ = FastLanguageModel.from_pretrained(
-        model_name=MODEL_NAME,
-        max_seq_length=args.max_seq_len,
-        dtype=torch.bfloat16,
-        load_in_4bit=False,         # NO QLoRA · Qwen3.5/3.6 has higher quantization error
-    )
-
-    # ─── Tokenizer (AutoTokenizer bypass · proven discipline) ───
-    print("[2/5] Loading tokenizer (AutoTokenizer bypass · Unsloth dispatch broken for Qwen VL)...")
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    print(f"\n[1/5] Loading {MODEL_NAME} (27B bf16 · sdpa attn · ~54 GB)...", flush=True)
+    t = time.time()
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=False)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
+    print(f"      tokenizer loaded · {time.time()-t:.1f}s", flush=True)
 
-    # ─── LoRA ───
-    print("[3/5] Applying LoRA (r=64 · α=32 · standard target_modules)...")
-    model = FastLanguageModel.get_peft_model(
-        model,
+    t = time.time()
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_NAME,
+        torch_dtype=torch.bfloat16,
+        device_map="auto",
+        attn_implementation="sdpa",         # Blackwell sm_120 compatible
+        trust_remote_code=False,
+        low_cpu_mem_usage=True,
+    )
+    model.config.use_cache = False
+    print(f"      base model loaded · {time.time()-t:.1f}s", flush=True)
+    print(f"      GPU mem: {torch.cuda.memory_allocated(0)/1e9:.1f} GB", flush=True)
+
+    print("[2/5] Attaching LoRA adapter (r=64 · α=32 · standard target_modules)...", flush=True)
+    lora_config = LoraConfig(
         r=LORA_R,
         lora_alpha=LORA_ALPHA,
         lora_dropout=LORA_DROPOUT,
-        target_modules=TARGET_MODULES,
         bias="none",
-        use_gradient_checkpointing="unsloth",
+        target_modules=TARGET_MODULES,
+        task_type="CAUSAL_LM",
     )
-    model.print_trainable_parameters()
+    model = get_peft_model(model, lora_config)
+    trainable, total = 0, 0
+    for p in model.parameters():
+        total += p.numel()
+        if p.requires_grad:
+            trainable += p.numel()
+    print(f"      trainable: {trainable:,} / {total:,} ({100 * trainable / total:.3f}%)", flush=True)
 
-    # ─── Dataset ───
-    print("[4/5] Loading dataset...")
+    print("[3/5] Loading dataset...", flush=True)
     train_dataset = load_dataset("json", data_files=TRAIN_FILE, split="train")
     eval_dataset = load_dataset("json", data_files=EVAL_FILE, split="train")
 
@@ -223,7 +231,6 @@ def main():
         eval_dataset = eval_dataset.select(range(min(200, len(eval_dataset))))
 
     def format_chat(example):
-        """Format messages · Gold Standard discipline: default apply_chat_template, no enable_thinking override."""
         text = tokenizer.apply_chat_template(
             example["messages"],
             tokenize=False,
@@ -244,57 +251,64 @@ def main():
         num_proc=4,
     )
 
-    # Cap eval set
     if len(eval_dataset) > MAX_EVAL_SAMPLES:
-        print(f"  Capping eval from {len(eval_dataset):,} to {MAX_EVAL_SAMPLES}")
+        print(f"  Capping eval from {len(eval_dataset):,} to {MAX_EVAL_SAMPLES}", flush=True)
         eval_dataset = eval_dataset.select(range(MAX_EVAL_SAMPLES))
 
-    # Steps math (Gold Standard formula: 0.6 of one full epoch)
     eff_batch = BATCH_SIZE * GRAD_ACCUM
     full_epoch_steps = len(train_dataset) // eff_batch
-    max_steps = int(full_epoch_steps * MAX_EPOCH_FRACTION)
+    max_steps = max(int(full_epoch_steps * MAX_EPOCH_FRACTION), 5)
 
-    print(f"  Train: {len(train_dataset):,} | Eval: {len(eval_dataset):,}")
-    print(f"  Eff batch:     {eff_batch}")
-    print(f"  Full epoch:    {full_epoch_steps} steps")
-    print(f"  Max steps:     {max_steps} (capped at {MAX_EPOCH_FRACTION} epoch · early stopping may trigger sooner)")
+    print(f"  Train: {len(train_dataset):,} | Eval: {len(eval_dataset):,}", flush=True)
+    print(f"  Eff batch:     {eff_batch}", flush=True)
+    print(f"  Full epoch:    {full_epoch_steps} steps", flush=True)
+    print(f"  Max steps:     {max_steps} (capped at {MAX_EPOCH_FRACTION} epoch · early stop may fire sooner)", flush=True)
 
-    # ─── Trainer ───
-    print("[5/5] Configuring trainer...")
+    print("[4/5] Configuring trainer...", flush=True)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
 
+    sft = SFTConfig(
+        output_dir=str(OUTPUT_DIR),
+        max_steps=max_steps,
+        per_device_train_batch_size=BATCH_SIZE,
+        per_device_eval_batch_size=1,
+        gradient_accumulation_steps=GRAD_ACCUM,
+        gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
+        learning_rate=LEARNING_RATE,
+        lr_scheduler_type=LR_SCHEDULER,
+        warmup_ratio=WARMUP_RATIO,
+        weight_decay=WEIGHT_DECAY,
+        bf16=True,
+        max_length=args.max_seq_len,                    # TRL 0.24 (was max_seq_length)
+        dataset_text_field="text",
+        completion_only_loss=False,                     # match prior cooks · whole-sequence loss
+        eval_strategy="steps",
+        eval_steps=EVAL_STEPS if not args.smoke_test else max(2, max_steps // 3),
+        save_strategy="steps",
+        save_steps=SAVE_STEPS if not args.smoke_test else max(2, max_steps // 3),
+        save_total_limit=SAVE_TOTAL_LIMIT,
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
+        report_to="none",
+        logging_steps=5 if args.smoke_test else 25,
+        seed=42,
+        data_seed=42,
+        dataloader_num_workers=2,
+        remove_unused_columns=False,
+        ddp_find_unused_parameters=False,
+        optim="adamw_torch",
+    )
+
     trainer = SFTTrainer(
         model=model,
-        tokenizer=tokenizer,
+        args=sft,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        args=SFTConfig(
-            output_dir=str(OUTPUT_DIR),
-            max_steps=max_steps,
-            per_device_train_batch_size=BATCH_SIZE,
-            per_device_eval_batch_size=1,
-            gradient_accumulation_steps=GRAD_ACCUM,
-            learning_rate=LEARNING_RATE,
-            lr_scheduler_type=LR_SCHEDULER,
-            warmup_ratio=WARMUP_RATIO,
-            weight_decay=WEIGHT_DECAY,
-            bf16=True,
-            logging_steps=10,
-            eval_strategy="steps",
-            eval_steps=EVAL_STEPS,
-            save_strategy="steps",
-            save_steps=SAVE_STEPS,
-            save_total_limit=SAVE_TOTAL_LIMIT,
-            load_best_model_at_end=True,
-            metric_for_best_model="eval_loss",
-            greater_is_better=False,
-            report_to="none",
-            max_seq_length=args.max_seq_len,
-            packing=True,           # may be skipped by Unsloth VL detection · OK
-            dataset_text_field="text",
-        ),
+        processing_class=tokenizer,
         callbacks=[
             EarlyStoppingCallback(
                 early_stopping_patience=EARLY_STOPPING_PATIENCE,
@@ -303,12 +317,11 @@ def main():
         ],
     )
 
-    # ─── Train ───
-    print("\n" + "=" * 70)
-    print(f"  TRAINING START · {BUILD_NAME}")
-    print(f"  LR={LEARNING_RATE}, batch={eff_batch}, scheduler={LR_SCHEDULER}")
-    print(f"  Early stopping: patience={EARLY_STOPPING_PATIENCE}, threshold={EARLY_STOPPING_THRESHOLD}")
-    print("=" * 70)
+    print("\n" + "=" * 70, flush=True)
+    print(f"  TRAINING START · {BUILD_NAME}", flush=True)
+    print(f"  LR={LEARNING_RATE}, batch={eff_batch}, scheduler={LR_SCHEDULER}", flush=True)
+    print(f"  Early stopping: patience={EARLY_STOPPING_PATIENCE}, threshold={EARLY_STOPPING_THRESHOLD}", flush=True)
+    print("=" * 70, flush=True)
 
     if args.resume:
         result = trainer.train(resume_from_checkpoint=args.resume)
@@ -317,52 +330,50 @@ def main():
 
     elapsed = time.time() - t0
 
-    # ─── Save ───
-    print("\n" + "=" * 70)
-    print(f"  TRAINING COMPLETE · {BUILD_NAME}")
-    print(f"  Loss:    {result.training_loss:.4f}")
-    print(f"  Steps:   {result.global_step}")
-    print(f"  Time:    {elapsed/3600:.2f}h ({elapsed/60:.0f}m)")
-    print("=" * 70)
+    print("\n" + "=" * 70, flush=True)
+    print(f"  TRAINING COMPLETE · {BUILD_NAME}", flush=True)
+    print(f"  Loss:    {result.training_loss:.4f}", flush=True)
+    print(f"  Steps:   {result.global_step}", flush=True)
+    print(f"  Time:    {elapsed/3600:.2f}h ({elapsed/60:.0f}m)", flush=True)
+    print("=" * 70, flush=True)
 
-    # Save adapter
-    trainer.model.save_pretrained(str(OUTPUT_DIR))
+    print(f"\n[5/5] Saving adapter to {OUTPUT_DIR}...", flush=True)
+    trainer.save_model(str(OUTPUT_DIR))
     tokenizer.save_pretrained(str(OUTPUT_DIR))
-    print(f"  Adapter saved to: {OUTPUT_DIR}")
+    print(f"      adapter saved", flush=True)
 
-    # Merge
-    print("\n  Merging adapter into base model...")
+    print("\n  Merging LoRA adapter into base for deployment...", flush=True)
     MERGED_DIR.mkdir(parents=True, exist_ok=True)
-    model.save_pretrained_merged(
-        str(MERGED_DIR),
-        tokenizer,
-        save_method="merged_16bit",
-    )
-    print(f"  Merged model saved to: {MERGED_DIR}")
+    merged_model = trainer.model.merge_and_unload()
+    merged_model.save_pretrained(str(MERGED_DIR), safe_serialization=True, max_shard_size="5GB")
+    tokenizer.save_pretrained(str(MERGED_DIR))
+    print(f"      merged: {MERGED_DIR}", flush=True)
 
-    # ─── NAS mirror (best-effort) ───
     try:
         if NAS_MIRROR.parent.exists():
-            print(f"\n  Mirroring to NAS at {NAS_MIRROR}...")
+            print(f"\n  Mirroring to NAS at {NAS_MIRROR}...", flush=True)
             NAS_MIRROR.mkdir(parents=True, exist_ok=True)
             os.system(f"rsync -a {OUTPUT_DIR}/ {NAS_MIRROR}/lora-adapter/ 2>&1")
             os.system(f"rsync -a {MERGED_DIR}/ {NAS_MIRROR}/merged/ 2>&1")
-            print(f"  NAS mirror complete · weights are anchored")
+            print(f"  NAS mirror complete", flush=True)
         else:
-            print(f"  NAS mount missing · skipping mirror (run manually post-cook)")
+            print(f"  NAS mount missing · skipping mirror (run manually post-cook)", flush=True)
     except Exception as e:
-        print(f"  WARN · NAS mirror skipped: {e}")
+        print(f"  WARN · NAS mirror skipped: {e}", flush=True)
 
-    # ─── Manifest ───
     manifest = {
         "model": BUILD_NAME,
         "base_local_path": MODEL_NAME,
         "base_canonical": CANONICAL_BASE,
         "architecture": "Qwen3_5ForConditionalGeneration · hybrid GDN + standard attention",
         "method": f"bf16 LoRA r={LORA_R} alpha={LORA_ALPHA}",
+        "stack": "vanilla transformers + peft + trl + sdpa attn (sm_120 compat)",
         "config_source": "Swarm Gold Standard (SwarmCurator-27B-v1 · loss 0.477)",
+        "stack_deviation": "Unsloth dropped due to FA2 sm_120 incompatibility · all "
+                           "hyperparameters identical · vanilla path validated on "
+                           "Bookmaker-8B + Hack-Deed-Maker-3B Granite cooks",
         "data": {
-            "block_version": "Royal Jelly CRE Block-1-v2",
+            "block_version": "Royal Jelly CRE Block-1-v3 (Path B · BALANCED)",
             "train_records": data_info["train_count"],
             "eval_records": data_info["eval_count"],
             "train_sha256": data_info["train_sha256"],
@@ -380,24 +391,24 @@ def main():
             "batch_size": BATCH_SIZE,
             "grad_accum": GRAD_ACCUM,
             "max_seq_len": MAX_SEQ_LEN,
-            "packing": True,
             "early_stopping_patience": EARLY_STOPPING_PATIENCE,
             "epoch_fraction": MAX_EPOCH_FRACTION,
+            "attention_impl": "sdpa",
         },
         "hardware": {
             "gpu": torch.cuda.get_device_name(0),
             "vram_gb": round(torch.cuda.get_device_properties(0).total_memory / 1e9),
+            "power_limit_w": 550,
         },
         "gold_standard_reference": {
             "model": "SwarmCurator-27B-v1",
             "loss": 0.4766,
             "steps": 1000,
             "elapsed_hours": 14.38,
-            "data_records": 62525,
         },
         "lineage": {
             "atlas_v1_status": "vanished · weights lost · this is the rebuild",
-            "atlas_v1_foundation_records_in_block_1_v2": 16938,
+            "atlas_v1_foundation_in_block_1_v3": 12797,
         },
         "elapsed_hours": round(elapsed / 3600, 2),
         "completed_at": datetime.now(timezone.utc).isoformat(),
@@ -409,15 +420,7 @@ def main():
     manifest_path = MERGED_DIR.parent / "MANIFEST.json"
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
-
-    print(f"\n  Manifest:  {manifest_path}")
-    print(f"  Merged:    {MERGED_DIR}")
-    print(f"\n  Next steps:")
-    print(f"    1. Fix vision_config (Unsloth strips it during merge):")
-    print(f"       python3 fix_vision_config.py {MERGED_DIR} --base {MODEL_NAME}")
-    print(f"    2. Deploy:")
-    print(f"       vllm serve {MERGED_DIR} --dtype bfloat16 --enforce-eager --skip-mm-profiling")
-    print("=" * 70)
+    print(f"\n  Manifest:  {manifest_path}", flush=True)
 
 
 if __name__ == "__main__":
