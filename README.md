@@ -229,6 +229,17 @@ atlas-3.6-27B-cook-book/
 │       ├── train_atlas_qwen_27b.py    cook script · forked from gold_standard_27b.py
 │       ├── launch_atlas_qwen_27b.sh   the launch command
 │       └── fix_vision_config.py       post-merge fix (port from Gold Standard repo)
+├── REVIEWS/
+│   ├── README.md                      review discipline · template for future cooks
+│   └── atlas-qwen-27b-cook-review-chain.md
+│                                       full senior-hack review chain · initial → fixes →
+│                                       canary → final sign-off · 65-75% → 20-25% probability
+│                                       of materially-worse-than-SwarmCurator-27B-v1
+├── AIOV/
+│   ├── README.md                      product contract reference
+│   └── contracts/
+│       ├── deal_input.json            canonical input schema
+│       └── decision_output.json       canonical output schema (the AIOV product contract)
 └── (future)
     ├── COOKBOOKS/                     Qwen's official cookbooks (annotated for our use)
     └── BEEAI/                         agent runtime integration plan
