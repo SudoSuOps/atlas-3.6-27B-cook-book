@@ -235,6 +235,12 @@ atlas-3.6-27B-cook-book/
 │                                       full senior-hack review chain · initial → fixes →
 │                                       canary → final sign-off · 65-75% → 20-25% probability
 │                                       of materially-worse-than-SwarmCurator-27B-v1
+├── SKILLS/
+│   ├── README.md                      Custom Claude Code skills · operational playbooks
+│   └── canary-then-cook/
+│       └── SKILL.md                   /canary-then-cook · the 5-stage senior-hack review
+│                                       discipline that saved this cook · invokable in any
+│                                       Claude Code session
 ├── AIOV/
 │   ├── README.md                      product contract reference
 │   └── contracts/
