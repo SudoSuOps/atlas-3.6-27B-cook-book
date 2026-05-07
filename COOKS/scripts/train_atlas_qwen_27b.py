@@ -53,7 +53,9 @@ LORA_R = 64
 LORA_ALPHA = 32
 LORA_DROPOUT = 0.0
 LEARNING_RATE = 1e-5            # PROVEN · NEVER 2e-5+ for 27B
-MAX_EPOCH_FRACTION = 0.6
+MAX_EPOCH_FRACTION = 0.15       # Block-1-v3 is 7.8× larger than Gold Standard ref corpus
+                                # 0.15 × 486K = 73K record exposures (still > SwarmCurator's
+                                # 0.6 × 62K = 37K reference) · early stopping kicks in anyway
 BATCH_SIZE = 1                  # vanilla transformers GC needs batch=1 for 27B safety
 GRAD_ACCUM = 32                 # effective batch = 32 (matches Gold Standard target)
 MAX_SEQ_LEN = 4096
@@ -289,6 +291,10 @@ def main():
         bf16=True,
         max_length=args.max_seq_len,                    # TRL 0.24 (was max_seq_length)
         dataset_text_field="text",
+        packing=True,                                    # 4-6× throughput · concat short
+                                                         # examples up to max_length · proven on
+                                                         # Gold Standard SwarmCurator-27B-v1
+        packing_strategy="bfd",                          # Best Fit Decreasing · TRL default
         completion_only_loss=False,                     # match prior cooks · whole-sequence loss
         eval_strategy="steps",
         eval_steps=EVAL_STEPS if not args.smoke_test else max(2, max_steps // 3),

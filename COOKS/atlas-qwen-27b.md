@@ -65,8 +65,11 @@ training:
   gradient_accumulation_steps: 16
   effective_batch_size: 32
   max_seq_len: 4096
-  max_epoch_fraction: 0.6           # 0.6 of one full epoch · prevents memorization
-  packing: true                     # may be skipped by Unsloth VL detection · OK
+  max_epoch_fraction: 0.15          # Block-1-v3 is 7.8× larger than Gold Standard reference
+                                    # 0.15 × 486K = 73K record exposures (still > SwarmCurator's
+                                    # 0.6 × 62K = 37K reference) · early stopping kicks in anyway
+  packing: true                     # 4-6× throughput · concat short examples up to max_length
+  packing_strategy: bfd             # Best Fit Decreasing · TRL 0.24 default
   early_stopping:
     patience: 3
     threshold: 0.001
@@ -102,11 +105,22 @@ corpus:
 steps_math:
   effective_batch:    32
   full_epoch_steps:   486,428 / 32  = 15,200 steps  (one full pass · we'd never run this)
-  max_steps:          15,200 * 0.6  = 9,120 steps   (Gold Standard 0.6 epoch cap)
-  early_stopping:     likely triggers earlier (SwarmCurator-27B-v1 stopped at 1000 of 1171
-                      with patience=3 · same here)
-  expected_landing:   somewhere between 2000-4000 steps based on corpus size and
-                      typical cosine plateau · loss target < 0.45 (better than 0.477 reference)
+  max_steps:          15,200 * 0.15 = 2,280 steps   (epoch_fraction tuned for larger corpus)
+  early_stopping:     patience=3 · threshold=0.001 · likely fires before 2,280
+  expected_landing:   somewhere between 1,000-2,000 steps · loss target < 0.45
+                      (better than SwarmCurator-27B-v1's 0.477 reference)
+  why_0.15_not_0.6:   The Gold Standard's 0.6 was set for a 62K-record corpus.
+                      Block-1-v3 is 7.8× bigger. 0.15 epoch on 486K records gives
+                      73K record exposures · still MORE than SwarmCurator's full
+                      37K exposures at 0.6 of 62K · same effective training depth.
+                      Without this tune the cook would project at 4-13 days vs the
+                      target 1.5-2 days.
+
+throughput_with_packing:
+  smoke v4 (no packing) measured  137 sec/step · single-GPU · batch=1 grad_accum=32
+  smoke v5 (with packing) target  30-50 sec/step · 4-6× speedup expected
+  full cook ETA with packing      ~20-35 hours (incl model load · eval pauses · merge)
+                                  vs 87+ hours without packing
 
 hardware:
   rig: swarmrails (192.168.0.100)
