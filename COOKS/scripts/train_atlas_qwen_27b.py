@@ -36,11 +36,11 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 MODEL_NAME = "/data2/qwen-3.6-27b"               # local · base downloaded earlier (52 GB)
 CANONICAL_BASE = "Qwen/Qwen3.6-27B"              # for manifest provenance
-TRAIN_FILE = "/data1/atlas-qwen-27b/train.jsonl"
-EVAL_FILE = "/data1/atlas-qwen-27b/eval.jsonl"
-OUTPUT_DIR = Path("/data1/atlas-qwen-27b/lora-adapter")
-MERGED_DIR = Path("/data1/atlas-qwen-27b/merged")
-LOG_DIR = Path("/data1/atlas-qwen-27b/logs")
+TRAIN_FILE = "/data1/atlas-qwen-27b-v4/train.jsonl"
+EVAL_FILE = "/data1/atlas-qwen-27b-v4/eval.jsonl"
+OUTPUT_DIR = Path("/data1/atlas-qwen-27b-v4/lora-adapter")
+MERGED_DIR = Path("/data1/atlas-qwen-27b-v4/merged")
+LOG_DIR = Path("/data1/atlas-qwen-27b-v4/logs")
 NAS_MIRROR = Path("/mnt/swarm/model_archives/atlas-qwen-27b")  # best-effort
 BUILD_NAME = "Atlas-Qwen-27B"
 
@@ -53,9 +53,9 @@ LORA_R = 64
 LORA_ALPHA = 32
 LORA_DROPOUT = 0.0
 LEARNING_RATE = 1e-5            # PROVEN · NEVER 2e-5+ for 27B
-MAX_EPOCH_FRACTION = 0.15       # Block-1-v3 is 7.8× larger than Gold Standard ref corpus
-                                # 0.15 × 486K = 73K record exposures (still > SwarmCurator's
-                                # 0.6 × 62K = 37K reference) · early stopping kicks in anyway
+MAX_EPOCH_FRACTION = 0.30       # Block-1-v4 culled to 244K · 0.30 × 244K = 73K record
+                                # exposures · matches Gold Standard scale · doctrine signal
+                                # not diluted · early stopping fires before max regardless
 BATCH_SIZE = 1                  # vanilla transformers GC needs batch=1 for 27B safety
 GRAD_ACCUM = 32                 # effective batch = 32 (matches Gold Standard target)
 MAX_SEQ_LEN = 4096
@@ -291,10 +291,10 @@ def main():
         bf16=True,
         max_length=args.max_seq_len,                    # TRL 0.24 (was max_seq_length)
         dataset_text_field="text",
-        packing=True,                                    # 4-6× throughput · concat short
-                                                         # examples up to max_length · proven on
-                                                         # Gold Standard SwarmCurator-27B-v1
-        packing_strategy="bfd",                          # Best Fit Decreasing · TRL default
+        packing=False,                                   # SDPA + GDN UNSAFE for packing
+                                                         # · TRL #3705 · padding-free needs FA2
+                                                         # · Gated DeltaNet state-leak risk
+                                                         # · senior peer review · Atlas v1 was Unsloth
         completion_only_loss=False,                     # match prior cooks · whole-sequence loss
         eval_strategy="steps",
         eval_steps=EVAL_STEPS if not args.smoke_test else max(2, max_steps // 3),
@@ -309,7 +309,12 @@ def main():
         seed=42,
         data_seed=42,
         dataloader_num_workers=2,
-        remove_unused_columns=False,
+        remove_unused_columns=False,                     # MUST be False · TRL packing emits
+                                                         # seq_lengths column the collator needs ·
+                                                         # default True strips it → silent
+                                                         # cross-contamination across packed pairs
+                                                         # (mostly relevant when packing=True · kept
+                                                         #  False here as belt-and-suspenders)
         ddp_find_unused_parameters=False,
         optim="adamw_torch",
     )
