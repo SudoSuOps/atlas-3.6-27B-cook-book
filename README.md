@@ -237,10 +237,14 @@ atlas-3.6-27B-cook-book/
 │                                       of materially-worse-than-SwarmCurator-27B-v1
 ├── SKILLS/
 │   ├── README.md                      Custom Claude Code skills · operational playbooks
-│   └── canary-then-cook/
-│       └── SKILL.md                   /canary-then-cook · the 5-stage senior-hack review
-│                                       discipline that saved this cook · invokable in any
-│                                       Claude Code session
+│   ├── canary-then-cook/
+│   │   └── SKILL.md                   /canary-then-cook · the 5-stage senior-hack review
+│   │                                   discipline that saved this cook · invokable in any
+│   │                                   Claude Code session
+│   └── gpu-miner-review/
+│       └── SKILL.md                   /gpu-miner-review · GPU thermal + power discipline ·
+│                                       miner mindset · pre-flight / during-cook / post-cook
+│                                       · the 88°C → 500W cap drop locked default
 ├── AIOV/
 │   ├── README.md                      product contract reference
 │   └── contracts/

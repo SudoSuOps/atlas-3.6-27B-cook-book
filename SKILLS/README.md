@@ -22,10 +22,16 @@ cloning the repo can install them locally and inherit the discipline.
 ```
 SKILLS/
 ├── README.md                          this file
-└── canary-then-cook/
-    └── SKILL.md                       senior-hack review discipline ·
-                                        5-stage process · catches silent-
-                                        corruption bugs before GPU burn
+├── canary-then-cook/
+│   └── SKILL.md                       senior-hack review discipline ·
+│                                       5-stage process · catches silent-
+│                                       corruption bugs before GPU burn
+└── gpu-miner-review/
+    └── SKILL.md                       GPU thermal + power discipline ·
+                                       miner mindset (cards run 24/7) ·
+                                       pre-flight / during-cook / post-cook
+                                       checks · pulled from the Atlas-Qwen-27B
+                                       88°C event that locked 500W cap as default
 ```
 
 ---
