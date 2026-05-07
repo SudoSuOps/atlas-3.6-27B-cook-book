@@ -231,10 +231,15 @@ def main():
         eval_dataset = eval_dataset.select(range(min(200, len(eval_dataset))))
 
     def format_chat(example):
+        # enable_thinking=False · matches SwarmCapitalMarkets-27B (the predecessor
+        # cook that produced the original Atlas v1 weights). Our pairs have direct
+        # responses · no <think>...</think> blocks · we don't want the chat template
+        # to inject them and contaminate the training token stream.
         text = tokenizer.apply_chat_template(
             example["messages"],
             tokenize=False,
             add_generation_prompt=False,
+            enable_thinking=False,
         )
         return {"text": text}
 
