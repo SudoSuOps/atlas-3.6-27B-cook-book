@@ -235,16 +235,15 @@ atlas-3.6-27B-cook-book/
 │                                       full senior-hack review chain · initial → fixes →
 │                                       canary → final sign-off · 65-75% → 20-25% probability
 │                                       of materially-worse-than-SwarmCurator-27B-v1
-├── SKILLS/
-│   ├── README.md                      Custom Claude Code skills · operational playbooks
-│   ├── canary-then-cook/
-│   │   └── SKILL.md                   /canary-then-cook · the 5-stage senior-hack review
-│   │                                   discipline that saved this cook · invokable in any
-│   │                                   Claude Code session
-│   └── gpu-miner-review/
-│       └── SKILL.md                   /gpu-miner-review · GPU thermal + power discipline ·
-│                                       miner mindset · pre-flight / during-cook / post-cook
-│                                       · the 88°C → 500W cap drop locked default
+├── SKILLS/                            6-skill cook stack · invokable as /<name>
+│   ├── README.md                      folder index + lifecycle map + install paths
+│   ├── canary-then-cook/SKILL.md      sr-hack review discipline · 5 stages
+│   ├── gpu-miner-review/SKILL.md      rigs are SMDs · thermal / power / algorithm class
+│   ├── cook-flightsheet/SKILL.md      every cook gets a flightsheet · 5-cap STNL grades
+│   │                                   · training blocks · energy cost-to-cook
+│   ├── cook-monitoring/SKILL.md       6 telemetry streams · anomaly playbook
+│   ├── client-update/SKILL.md         periodic status reports · 6 types
+│   └── cook-om/SKILL.md               OM · CRE-broker sales document · 11 sections
 ├── AIOV/
 │   ├── README.md                      product contract reference
 │   └── contracts/
